@@ -1,0 +1,359 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  CANDIDATE
+  ADMIN
+  SUPER_ADMIN
+}
+
+enum NoticeStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum ApplicationStatus {
+  DRAFT
+  SUBMITTED
+  PAYMENT_PENDING
+  PAYMENT_SUCCESS
+  PAYMENT_FAILED
+  UNDER_REVIEW
+  REJECTED
+  ACCEPTED
+}
+enum PageStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+model Page {
+  id           Int        @id @default(autoincrement())
+  slug         String     @unique  // privacy-policy | terms-and-conditions
+  title        String
+  contentHtml  String     // sanitized on frontend ideally
+  status       PageStatus @default(DRAFT)
+  pinned       Boolean    @default(false)
+  seoTitle     String?
+  seoDescription String?
+
+  updatedById  Int?
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  updatedBy User? @relation(fields: [updatedById], references: [id])
+
+  @@index([status, pinned])
+}
+
+
+enum PaymentStatus {
+  CREATED
+  SUCCESS
+  FAILED
+  REFUND_PENDING
+  PARTIALLY_REFUNDED
+  REFUNDED
+}
+
+enum ResultStatus {
+  QUALIFIED
+  NOT_QUALIFIED
+  ABSENT
+  WITHHELD
+}
+
+
+enum OtpChannel {
+  EMAIL
+  SMS
+}
+
+model Otp {
+  id          Int        @id @default(autoincrement())
+  channel     OtpChannel
+  destination String     // email or phone
+  codeHash    String
+  purpose     String     // "REGISTER" | "LOGIN" | "RESET_PASSWORD"
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  attempts    Int        @default(0)
+  createdAt   DateTime   @default(now())
+
+  @@index([channel, destination, purpose])
+  @@index([expiresAt])
+}
+
+
+model LoginAttempt {
+  id        Int      @id @default(autoincrement())
+  email     String?
+  ip        String
+  userAgent String?
+  success   Boolean
+  reason    String?
+  createdAt DateTime @default(now())
+
+  @@index([ip, createdAt])
+  @@index([email, createdAt])
+}
+
+model LoginLock {
+  id        Int      @id @default(autoincrement())
+  email     String?  @unique
+  ip        String?  @unique
+  lockedUntil DateTime
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+model Invoice {
+  id            Int      @id @default(autoincrement())
+  invoiceNo     String   @unique
+
+  paymentId     Int      @unique
+  applicationId Int      @unique
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  // buyer snapshot (immutable)
+  buyerName     String?
+  buyerEmail    String?
+  buyerPhone    String?
+  buyerStateCode String? // 2 digit for GST split decisions (best effort)
+
+  currency      String   @default("INR")
+  amountPaise   Int
+
+  taxablePaise  Int
+  cgstPaise     Int      @default(0)
+  sgstPaise     Int      @default(0)
+  igstPaise     Int      @default(0)
+  totalTaxPaise Int
+  grandTotalPaise Int
+
+  gstRatePct    Float    // e.g. 18 means 18%
+
+  // issuer snapshot
+  orgLegalName  String
+  orgGstin      String?
+  orgAddress    String?
+  orgStateCode  String?
+
+  razorpayOrderId    String?
+  razorpayPaymentId  String?
+
+  pdfUrl        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([applicationId])
+  @@index([createdAt])
+}
+
+model User {
+  id           Int      @id @default(autoincrement())
+  name         String
+  email        String   @unique
+  phone        String?  @unique
+  passwordHash String
+  role         UserRole @default(CANDIDATE)
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  applications  Application[]
+  notices       Notice[] @relation("NoticeCreatedBy")
+  pagesUpdated  Page[]
+  notifications Notification[]
+}
+
+model Notice {
+  id          Int          @id @default(autoincrement())
+  title       String
+  body        String?
+  status      NoticeStatus @default(DRAFT)
+  category    String?
+  department  String?
+  isImportant Boolean      @default(false)
+  publishAt   DateTime?
+  publishedAt DateTime?
+  attachments Json?
+  createdById Int?
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+
+  createdBy User? @relation("NoticeCreatedBy", fields: [createdById], references: [id])
+
+  @@index([status, publishAt])
+}
+
+model Recruitment {
+  id          Int       @id @default(autoincrement())
+  code        String    @unique
+  title       String
+  description String?
+  startAt     DateTime?
+  endAt       DateTime?
+  isActive    Boolean   @default(true)
+
+  isExpired   Boolean   @default(false)
+
+  metadata    Json?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  posts       Post[]
+}
+
+model Post {
+  id            Int      @id @default(autoincrement())
+  recruitmentId Int
+  code          String
+  name          String
+  vacancies     Int      @default(0)
+  feeRules      Json?
+  formSchema    Json?
+  isActive      Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  recruitment  Recruitment  @relation(fields: [recruitmentId], references: [id])
+  applications Application[]
+
+  @@unique([recruitmentId, code])
+  @@index([recruitmentId, isActive])
+}
+
+model Application {
+  id            Int               @id @default(autoincrement())
+  applicationNo String            @unique
+  userId        Int
+  postId        Int
+  status        ApplicationStatus @default(DRAFT)
+  data          Json?
+  documents     Json?
+  invoice Invoice?
+
+  submittedAt   DateTime?
+  createdAt     DateTime          @default(now())
+  updatedAt     DateTime          @updatedAt
+
+  user      User  @relation(fields: [userId], references: [id])
+  post      Post  @relation(fields: [postId], references: [id], onDelete: Cascade)
+  payments  Payment[]
+  admitCard AdmitCard?
+  result    Result?
+
+  @@index([userId, postId])
+  @@index([status, submittedAt])
+}
+
+model Payment {
+  id            Int           @id @default(autoincrement())
+  applicationId Int
+  provider      String
+  orderId       String?
+  paymentId     String?
+  amountPaise   Int
+  currency      String        @default("INR")
+  status        PaymentStatus @default(CREATED)
+  providerData  Json?
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+    invoice Invoice?
+    refunds Refund[]
+
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  @@index([applicationId, status])
+}
+
+model Refund {
+  id             Int      @id @default(autoincrement())
+  paymentId      Int
+  razorpayRefundId String?
+  status         String   @default("CREATED") // CREATED|SUCCEEDED|FAILED|PROCESSING|PENDING etc.
+  amountPaise    Int
+  currency       String   @default("INR")
+  reason         String?
+  notes          Json?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  payment Payment @relation(fields: [paymentId], references: [id], onDelete: Cascade)
+
+  @@index([paymentId, status])
+}
+
+model AdmitCard {
+  id            Int      @id @default(autoincrement())
+  applicationId Int      @unique
+  rollNo        String   @unique
+  examCenter    String?
+  examDate      DateTime?
+  shift         String?
+  qrData        String?
+  pdfUrl        String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+}
+
+model Result {
+  id            Int          @id @default(autoincrement())
+  applicationId Int          @unique
+  status        ResultStatus
+  totalMarks    Float?
+  breakdown     Json?
+  rank          Int?
+  categoryRank  Int?
+  publishedAt   DateTime?
+  pdfUrl        String?
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+
+  application Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+}
+
+model Report {
+  id          Int       @id @default(autoincrement())
+  type        String    // applications, results, payments, refunds, candidates
+  status      String    @default("PENDING") // PENDING, COMPLETED, FAILED
+  recordCount Int?      @default(0)
+  fileUrl     String?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+}
+
+model Notification {
+  id        Int      @id @default(autoincrement())
+  userId    Int
+  type      String   // REGISTRATION, LOGIN, APPLICATION_SUBMITTED, PAYMENT_SUCCESS, etc.
+  title     String
+  message   String   @db.Text
+  metadata  Json?    // Additional data like applicationId, paymentId, etc.
+  isRead    Boolean  @default(false)
+  readAt    DateTime?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@index([userId, createdAt])
+  @@index([type])
+}
