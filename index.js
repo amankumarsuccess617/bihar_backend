@@ -34,7 +34,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 app.use(cors({
-  origin: "http://localhost:3000",
+  origin: "https://bihar-frontend-kpx2-jnxbnnd3e.vercel.app",
   credentials: true
 }));
 app.use(express.json());
