@@ -13,6 +13,8 @@ import {
   getPostById,
   togglePostStatus,
 } from "../controllers/postController.js";
+import { validate } from "../middleware/validate.js";
+import { createPostBodySchema } from "../middleware/schemas.js";
 
 const router = express.Router();
 
@@ -70,6 +72,7 @@ router.post(
   "/recruitment/:recruitmentId",
   authMiddleware,
   roleMiddleware("ADMIN", "SUPER_ADMIN"),
+  validate(createPostBodySchema),
   createPost
 );
 
