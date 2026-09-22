@@ -1,25 +1,21 @@
-const errorHandler = (err, req, res, next) => {
-  console.error('Error:', err.message);
+import { AppError } from "../lib/errors.js";
 
-  if (err.name === 'ValidationError') {
-    return res.status(400).json({
-      error: 'Validation error',
-      details: err.message,
-    });
+export default function errorHandler(err, req, res, _next) {
+  if (!(err instanceof AppError) && !err.statusCode) {
+    err = new AppError(err.message || "Internal server error", 500);
   }
 
-  if (err.name === 'UnauthorizedError') {
-    return res.status(401).json({ error: 'Unauthorized' });
+  const status = err.statusCode || 500;
+  const payload = {
+    error: err.name || "Error",
+    message: err.message || "Internal server error",
+  };
+
+  if (err.details) payload.details = err.details;
+
+  if (process.env.NODE_ENV === "development" && status >= 500) {
+    payload.stack = err.stack;
   }
 
-  if (err.name === 'NotFoundError') {
-    return res.status(404).json({ error: 'Resource not found' });
-  }
-
-  res.status(500).json({
-    error: 'Internal server error',
-    message: process.env.NODE_ENV === 'development' ? err.message : 'Something went wrong',
-  });
-};
-
-module.exports = errorHandler;
+  res.status(status).json(payload);
+}
