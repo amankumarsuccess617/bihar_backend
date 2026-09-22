@@ -1,166 +1,186 @@
-import crypto from "crypto";
-import Razorpay from "razorpay";
 import prisma from "../lib/prisma.js";
 import { createOrGetInvoiceForPayment } from "../lib/invoiceService.js";
 import {
   notifyPaymentSuccess,
   notifyPaymentFailed,
 } from "../lib/notificationManager.js";
-
-const razorpay = new Razorpay({
-  key_id: process.env.RAZORPAY_KEY_ID,
-  key_secret: process.env.RAZORPAY_KEY_SECRET,
-});
+import {
+  getPaymentClient,
+  verifyPaymentSignature,
+} from "../lib/paymentProvider.js";
+import { logger } from "../lib/logger.js";
+import { AppError } from "../lib/errors.js";
 
 function feeFromRules(feeRules, applicantData) {
-  // feeRules example:
-  // { "GENERAL": 50000, "OBC": 40000, "SC": 30000 } (paise)
-  // applicantData example: { "category": "OBC" }
   const category = applicantData?.category || "GENERAL";
   const paise = feeRules?.[category] ?? feeRules?.GENERAL ?? 0;
   return Number(paise || 0);
 }
 
-// Candidate: create Razorpay order for an application
-export const createOrder = async (req, res) => {
-  const { applicationId } = req.body;
-  if (!applicationId) return res.status(400).json({ message: "applicationId required" });
+export const createOrder = async (req, res, next) => {
+  try {
+    const { applicationId } = req.body;
+    if (!applicationId) {
+      throw new AppError("applicationId required", 400);
+    }
 
-  const app = await prisma.application.findFirst({
-    where: { id: Number(applicationId), userId: req.user.id },
-    include: { post: true },
-  });
-  if (!app) return res.status(404).json({ message: "Application not found" });
+    const app = await prisma.application.findFirst({
+      where: { id: Number(applicationId), userId: req.user.id },
+      include: { post: true },
+    });
+    if (!app) {
+      throw new AppError("Application not found", 404);
+    }
 
-  // calculate fee
-  const amountPaise = feeFromRules(app.post.feeRules, app.data);
-  if (amountPaise <= 0) return res.status(400).json({ message: "Fee not configured" });
+    const amountPaise = feeFromRules(app.post.feeRules, app.data);
+    if (amountPaise <= 0) {
+      throw new AppError("Fee not configured", 400);
+    }
 
-  // create provider order
-  const order = await razorpay.orders.create({
-    amount: amountPaise,
-    currency: "INR",
-    receipt: app.applicationNo,
-    notes: { applicationId: String(app.id), applicationNo: app.applicationNo },
-  });
+    const razorpay = getPaymentClient();
+    const order = await razorpay.orders.create({
+      amount: amountPaise,
+      currency: "INR",
+      receipt: app.applicationNo,
+      notes: { applicationId: String(app.id), applicationNo: app.applicationNo },
+    });
 
-  // persist payment row
-  const payment = await prisma.payment.create({
-    data: {
-      applicationId: app.id,
-      provider: "razorpay",
+    const payment = await prisma.payment.create({
+      data: {
+        applicationId: app.id,
+        provider: "razorpay",
+        orderId: order.id,
+        amountPaise,
+        currency: "INR",
+        status: "CREATED",
+        providerData: order,
+      },
+    });
+
+    await prisma.application.update({
+      where: { id: app.id },
+      data: { status: "PAYMENT_PENDING" },
+    });
+
+    res.json({
+      keyId: process.env.RAZORPAY_KEY_ID,
       orderId: order.id,
       amountPaise,
       currency: "INR",
-      status: "CREATED",
-      providerData: order,
-    },
-  });
-
-  // move application to payment pending (optional)
-  await prisma.application.update({
-    where: { id: app.id },
-    data: { status: "PAYMENT_PENDING" },
-  });
-
-  res.json({
-    keyId: process.env.RAZORPAY_KEY_ID,
-    orderId: order.id,
-    amountPaise,
-    currency: "INR",
-    paymentId: payment.id,
-    applicationNo: app.applicationNo,
-  });
+      paymentId: payment.id,
+      applicationNo: app.applicationNo,
+    });
+  } catch (err) {
+    logger.error("create_order_failed", { message: err.message });
+    next(err instanceof AppError ? err : new AppError("Failed to create order", 500));
+  }
 };
 
-// Candidate: after client success, verify signature (recommended)
-export const verifyPayment = async (req, res) => {
-  const { razorpay_order_id, razorpay_payment_id, razorpay_signature, applicationId } = req.body;
+export const verifyPayment = async (req, res, next) => {
+  try {
+    const {
+      razorpay_order_id,
+      razorpay_payment_id,
+      razorpay_signature,
+      applicationId,
+    } = req.body;
 
-  if (!razorpay_order_id || !razorpay_payment_id || !razorpay_signature || !applicationId) {
-    return res.status(400).json({ message: "missing fields" });
-  }
+    if (
+      !razorpay_order_id ||
+      !razorpay_payment_id ||
+      !razorpay_signature ||
+      !applicationId
+    ) {
+      throw new AppError("missing fields", 400);
+    }
 
-  const app = await prisma.application.findFirst({
-    where: { id: Number(applicationId), userId: req.user.id },
-  });
-  if (!app) return res.status(404).json({ message: "Application not found" });
+    const app = await prisma.application.findFirst({
+      where: { id: Number(applicationId), userId: req.user.id },
+    });
+    if (!app) {
+      throw new AppError("Application not found", 404);
+    }
 
-  const body = `${razorpay_order_id}|${razorpay_payment_id}`;
-  const expected = crypto
-    .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-    .update(body)
-    .digest("hex");
+    const valid = verifyPaymentSignature({
+      orderId: razorpay_order_id,
+      paymentId: razorpay_payment_id,
+      signature: razorpay_signature,
+    });
 
-  if (expected !== razorpay_signature) {
+    if (!valid) {
+      await prisma.application.update({
+        where: { id: app.id },
+        data: { status: "PAYMENT_FAILED" },
+      });
+      try {
+        await notifyPaymentFailed(req.user, "Signature verification failed");
+      } catch (err) {
+        logger.error("payment_notification_failed", { message: err.message });
+      }
+      throw new AppError("Signature mismatch", 400);
+    }
+
+    const payment = await prisma.payment.findFirst({
+      where: { orderId: razorpay_order_id },
+      orderBy: { id: "desc" },
+    });
+
+    const post = await prisma.post.findUnique({
+      where: { id: app.postId },
+    });
+
+    try {
+      await notifyPaymentSuccess(req.user, payment, app, post);
+    } catch (err) {
+      logger.error("payment_success_notification_failed", { message: err.message });
+    }
+
+    await prisma.payment.updateMany({
+      where: {
+        applicationId: app.id,
+        provider: "razorpay",
+        orderId: razorpay_order_id,
+      },
+      data: {
+        paymentId: razorpay_payment_id,
+        status: "SUCCESS",
+        providerData: {
+          razorpay_order_id,
+          razorpay_payment_id,
+          razorpay_signature,
+        },
+      },
+    });
+
     await prisma.application.update({
       where: { id: app.id },
-      data: { status: "PAYMENT_FAILED" },
+      data: { status: "PAYMENT_SUCCESS" },
     });
-    // Send payment failed notification
-    await notifyPaymentFailed(
-      req.user,
-      "Signature verification failed"
-    ).catch((err) => console.error("[Payment Notification Error]", err));
-    return res.status(400).json({ message: "Signature mismatch" });
-  }
 
-  // Get updated payment and application details for notification
-  const payment = await prisma.payment.findFirst({
-    where: { orderId: razorpay_order_id },
-    orderBy: { id: "desc" },
-  });
-
-  const post = await prisma.post.findUnique({
-    where: { id: app.postId },
-  });
-
-  // Send payment success notification
-  await notifyPaymentSuccess(req.user, payment, app, post).catch((err) =>
-    console.error("[Payment Success Notification Error]", err)
-  );
-
-  // update latest payment record with same orderId
-  await prisma.payment.updateMany({
-    where: { applicationId: app.id, provider: "razorpay", orderId: razorpay_order_id },
-    data: {
-      paymentId: razorpay_payment_id,
-      status: "SUCCESS",
-      providerData: {
-        razorpay_order_id,
-        razorpay_payment_id,
-        razorpay_signature,
+    const payRow = await prisma.payment.findFirst({
+      where: {
+        applicationId: app.id,
+        provider: "razorpay",
+        orderId: razorpay_order_id,
+        status: "SUCCESS",
       },
-    },
-  });
+      orderBy: { id: "desc" },
+    });
+    if (payRow) {
+      await createOrGetInvoiceForPayment(payRow.id).catch(() => {});
+    }
 
-  await prisma.application.update({
-    where: { id: app.id },
-    data: { status: "PAYMENT_SUCCESS" },
-  });
-
-  const payRow = await prisma.payment.findFirst({
-    where: {
-      applicationId: app.id,
-      provider: "razorpay",
-      orderId: razorpay_order_id,
-      status: "SUCCESS",
-    },
-    orderBy: { id: "desc" },
-  });
-  if (payRow) {
-    await createOrGetInvoiceForPayment(payRow.id).catch(() => {});
+    res.json({ ok: true });
+  } catch (err) {
+    logger.error("verify_payment_failed", { message: err.message });
+    next(err instanceof AppError ? err : new AppError("Failed to verify payment", 500));
   }
-
-  res.json({ ok: true });
 };
 
-// Candidate: get my payment history
-export const getMyPayments = async (req, res) => {
+export const getMyPayments = async (req, res, next) => {
   const userId = req.user.id;
 
   try {
-    // Get all payments for this user's applications
     const payments = await prisma.payment.findMany({
       where: {
         application: {
@@ -177,13 +197,12 @@ export const getMyPayments = async (req, res) => {
       orderBy: { createdAt: "desc" },
     });
 
-    // Transform the data to match frontend expectations
     const formattedPayments = payments.map((p) => {
       const post = p.application?.post;
       return {
         id: p.id,
         orderId: p.orderId,
-        amount: Math.round(p.amountPaise / 100), // Convert paise to rupees
+        amount: Math.round(p.amountPaise / 100),
         status: p.status,
         paidAt: p.updatedAt,
         application: {
@@ -198,13 +217,12 @@ export const getMyPayments = async (req, res) => {
 
     res.json(formattedPayments);
   } catch (err) {
-    console.error("Error fetching payments:", err);
-    res.status(500).json({ message: "Failed to fetch payments", error: err.message });
+    logger.error("get_my_payments_failed", { message: err.message });
+    next(new AppError("Failed to fetch payments", 500));
   }
 };
 
-// ADMIN: GET ALL PAYMENTS WITH OPTIONAL STATUS FILTER
-export const getAllPayments = async (req, res) => {
+export const getAllPayments = async (req, res, next) => {
   try {
     const status = req.query.status;
 
@@ -237,7 +255,7 @@ export const getAllPayments = async (req, res) => {
         id: p.id,
         applicationId: p.applicationId,
         orderId: p.orderId,
-        amount: Math.round(p.amountPaise / 100), // Convert paise to rupees
+        amount: Math.round(p.amountPaise / 100),
         status: p.status,
         paidAt: p.updatedAt,
         application: {
@@ -262,7 +280,7 @@ export const getAllPayments = async (req, res) => {
 
     res.json(formattedPayments);
   } catch (err) {
-    console.error("[Get All Payments]", err);
-    res.status(500).json({ message: "Failed to fetch payments", error: err.message });
+    logger.error("get_all_payments_failed", { message: err.message });
+    next(new AppError("Failed to fetch payments", 500));
   }
 };

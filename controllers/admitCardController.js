@@ -189,23 +189,18 @@ export const generateAdmitCardsForPost = async (req, res) => {
 
       // NOTIFICATION
 
-      await notifyAdmitCardReady(app.user, {
-
-        id: savedCard.id,
-
-        rollNumber: rollNo,
-
-        examCenter: center,
-
-        examDate: new Date(examDate),
-
-        shift: String(shift),
-
-        pdfUrl,
-
-      }).catch((err) =>
-        console.error("[Admit Card Notification]", err)
-      );
+      try {
+        await notifyAdmitCardReady(app.user, {
+          id: savedCard.id,
+          rollNumber: rollNo,
+          examCenter: center,
+          examDate: new Date(examDate),
+          shift: String(shift),
+          pdfUrl,
+        });
+      } catch (err) {
+        console.error("[Admit Card Notification]", err);
+      }
 
       created++;
 
