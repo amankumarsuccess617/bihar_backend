@@ -1,7 +1,5 @@
 import prisma from "../lib/prisma.js";
 import {
-  isRecruitmentExpired,
-  isRecruitmentAccepting,
   updateRecruitmentExpiry,
   getRecruitmentStatus,
 } from "../lib/recruitmentUtils.js";

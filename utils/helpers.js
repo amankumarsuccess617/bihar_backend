@@ -2,8 +2,8 @@ import jwt from "jsonwebtoken";
 const generateToken = (user) => {
   return jwt.sign(
     { id: user.id, email: user.email, role: user.role },
-    process.env.JWT_SECRET || 'secret_key',
-    { expiresIn: '7d' }
+    process.env.JWT_SECRET || "secret_key",
+    { expiresIn: "7d" }
   );
 };
 
@@ -13,15 +13,15 @@ const generateOTP = () => {
 
 const generateApplicationNumber = (postId) => {
   const timestamp = Date.now().toString().slice(-6);
-  const random = Math.floor(Math.random() * 1000).toString().padStart(3, '0');
+  const random = Math.floor(Math.random() * 1000).toString().padStart(3, "0");
   return `APP-${postId}-${timestamp}-${random}`;
 };
 
 const generateRollNumber = (postId, applicationIndex) => {
   const date = new Date();
   const year = date.getFullYear().toString().slice(-2);
-  const month = (date.getMonth() + 1).toString().padStart(2, '0');
-  const index = applicationIndex.toString().padStart(5, '0');
+  const month = (date.getMonth() + 1).toString().padStart(2, "0");
+  const index = applicationIndex.toString().padStart(5, "0");
   return `${postId}-${year}${month}-${index}`;
 };
 

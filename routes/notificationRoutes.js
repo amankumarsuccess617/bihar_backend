@@ -4,7 +4,7 @@
  */
 
 import express from "express";
-import { authMiddleware, roleMiddleware } from "../middleware/auth.js";
+import { authMiddleware } from "../middleware/auth.js";
 import {
   listNotifications,
   getUnreadCountApi,

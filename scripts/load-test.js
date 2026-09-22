@@ -106,13 +106,17 @@ function testAuthFlow() {
  */
 function testDatabaseQueries() {
   // List applications (admin)
-  const adminToken =
-    "Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."; // Replace with real token
+  // Set LOAD_TEST_ADMIN_TOKEN to a real Bearer token before running load tests.
+  const adminToken = __ENV.LOAD_TEST_ADMIN_TOKEN
+    ? `Bearer ${__ENV.LOAD_TEST_ADMIN_TOKEN}`
+    : "";
 
   let res = http.get(`${BASE_URL}/applications?page=1&limit=50`, {
-    headers: {
-      Authorization: adminToken,
-    },
+    headers: adminToken
+      ? {
+          Authorization: adminToken,
+        }
+      : {},
   });
 
   check(res, {
