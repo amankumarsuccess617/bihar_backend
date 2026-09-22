@@ -7,11 +7,18 @@ import {
   myApplications,
   adminListApplications,
 } from "../controllers/applicationController.js";
+import { validate } from "../middleware/validate.js";
+import { createDraftApplicationBodySchema } from "../middleware/schemas.js";
 
 const router = express.Router();
 
 // candidate (must be logged in)
-router.post("/draft", authMiddleware, createDraftApplication);
+router.post(
+  "/draft",
+  authMiddleware,
+  validate(createDraftApplicationBodySchema),
+  createDraftApplication
+);
 router.patch("/:id", authMiddleware, updateApplication);
 router.post("/:id/submit", authMiddleware, submitApplication);
 router.get("/me", authMiddleware, myApplications);

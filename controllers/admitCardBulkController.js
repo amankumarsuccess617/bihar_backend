@@ -32,7 +32,7 @@ export const bulkZipAdmitCards = async (req, res) => {
 
   const files = []; // [{ absPath, nameInZip }]
   for (const a of apps) {
-    const roll = a.admitCard.rollNo.replace(/[^\w\-]+/g, "_");
+    const roll = a.admitCard.rollNo.replace(/[^\w-]+/g, "_");
 
     let pdfAbs = null;
     if (a.admitCard.pdfUrl && a.admitCard.pdfUrl.startsWith("/uploads/")) {

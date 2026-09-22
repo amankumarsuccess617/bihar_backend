@@ -195,7 +195,7 @@ export const generateReport = async (req, res) => {
 
         if (rows.length > 0) {
           const parser = new Parser({ fields: Object.keys(rows[0]) });
-          const csv = parser.parse(rows);
+          parser.parse(rows);
           fileUrl = `/reports/applications_${report.id}_${Date.now()}.csv`;
           // In production, save to S3 or file storage
         }

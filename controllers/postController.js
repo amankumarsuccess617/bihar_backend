@@ -341,27 +341,16 @@ export const createPost = async (
 
     // Send notification
 
-    if (
-      isActive !== false
-    ) {
-      const recruitment =
-        await prisma.recruitment.findUnique(
-          {
-            where: {
-              id: recruitmentId,
-            },
-          }
-        );
+    if (isActive !== false) {
+      const recruitment = await prisma.recruitment.findUnique({
+        where: { id: recruitmentId },
+      });
 
-      await notifyNewPost(
-        post,
-        recruitment
-      ).catch((err) =>
-        console.error(
-          "[Post Notification Error]",
-          err
-        )
-      );
+      try {
+        await notifyNewPost(post, recruitment);
+      } catch (err) {
+        console.error("[Post Notification Error]", err);
+      }
     }
 
     res.json(post);

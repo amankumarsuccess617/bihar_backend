@@ -1,20 +1,6 @@
-#!/usr/bin/env node
-
-/**
- * Database Backup Script
- * Backs up PostgreSQL database to local storage and optionally to AWS S3
- * 
- * Usage:
- *   node scripts/backup.js              # Local backup only
- *   node scripts/backup.js --upload     # Local backup + S3 upload
- * 
- * Setup cron job (runs daily at 2 AM):
- *   0 2 * * * cd /path/to/backend && node scripts/backup.js --upload
- */
-
 import fs from "fs";
 import path from "path";
-import { execSync } from "child_process";
+import { spawnSync } from "child_process";
 import dotenv from "dotenv";
 
 dotenv.config();
@@ -35,7 +21,7 @@ function ensureBackupDir() {
 }
 
 /**
- * Create local database backup
+ * Create local database backup without interpolating secrets into a shell string.
  */
 function createLocalBackup() {
   console.log("[Backup] Starting database backup...");
@@ -47,26 +33,31 @@ function createLocalBackup() {
   }
 
   try {
-    // Parse DATABASE_URL to extract connection details
-    // Format: postgresql://user:password@host:port/dbname
-    const urlMatch = dbUrl.match(
-      /postgresql:\/\/([^:]+):([^@]+)@([^:]+):(\d+)\/(.+)/
+    const parsed = new URL(dbUrl);
+    const user = decodeURIComponent(parsed.username);
+    const password = decodeURIComponent(parsed.password);
+    const host = parsed.hostname;
+    const port = parsed.port || "5432";
+    const database = parsed.pathname.replace(/^\//, "");
+
+    const result = spawnSync(
+      "pg_dump",
+      ["-h", host, "-p", port, "-U", user, "-F", "c", database],
+      {
+        env: { ...process.env, PGPASSWORD: password },
+        encoding: "buffer",
+      }
     );
 
-    if (!urlMatch) {
-      console.error("[Backup] ERROR: Invalid DATABASE_URL format");
-      process.exit(1);
+    if (result.error || result.status !== 0) {
+      const detail =
+        result.stderr?.toString() ||
+        result.error?.message ||
+        "pg_dump failed";
+      throw new Error(detail);
     }
 
-    const [, user, password, host, port, database] = urlMatch;
-
-    // Create backup using pg_dump
-    const command = `PGPASSWORD="${password}" pg_dump -h ${host} -p ${port} -U ${user} -F c ${database}`;
-
-    console.log("[Backup] Executing pg_dump...");
-    const backup = execSync(command, { stdio: "pipe" });
-
-    fs.writeFileSync(BACKUP_PATH, backup);
+    fs.writeFileSync(BACKUP_PATH, result.stdout);
     const fileSize = fs.statSync(BACKUP_PATH).size;
 
     console.log(

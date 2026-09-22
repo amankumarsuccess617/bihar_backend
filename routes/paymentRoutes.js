@@ -4,6 +4,11 @@ import { authMiddleware, roleMiddleware } from "../middleware/auth.js";
 import prisma from "../lib/prisma.js";
 import { createOrGetInvoiceForPayment } from "../lib/invoiceService.js";
 import { createOrder, verifyPayment, getMyPayments, getAllPayments } from "../controllers/paymentController.js";
+import { validate } from "../middleware/validate.js";
+import {
+  createOrderBodySchema,
+  verifyPaymentBodySchema,
+} from "../middleware/schemas.js";
 
 const router = express.Router();
 
@@ -16,8 +21,18 @@ router.get(
 );
 
 router.get("/my", authMiddleware, getMyPayments);
-router.post("/create-order", authMiddleware, createOrder);
-router.post("/verify", authMiddleware, verifyPayment);
+router.post(
+  "/create-order",
+  authMiddleware,
+  validate(createOrderBodySchema),
+  createOrder
+);
+router.post(
+  "/verify",
+  authMiddleware,
+  validate(verifyPaymentBodySchema),
+  verifyPayment
+);
 
 // webhook (NO auth middleware)
 router.post(
@@ -128,11 +143,11 @@ router.post(
             });
           }
 
-          // Compute total refunded (only count successful refunds if you prefer)
-          const succeededSum = await prisma.refund.aggregate({
+          // Compute total refunded (successful + non-failed refunds)
+          await prisma.refund.aggregate({
             where: {
               paymentId: pay.id,
-              status: { in: ["SUCCEEDED", "PROCESSED"] }, // keep flexible naming
+              status: { in: ["SUCCEEDED", "PROCESSED"] },
             },
             _sum: { amountPaise: true },
           });

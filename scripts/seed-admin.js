@@ -15,7 +15,7 @@ async function seedAdmin() {
 
     // Create admin user
     const hashedPassword = await bcrypt.hash("admin123", 10);
-    const admin = await prisma.user.create({
+    await prisma.user.create({
       data: {
         name: "Admin User",
         email: "admin@example.com",
